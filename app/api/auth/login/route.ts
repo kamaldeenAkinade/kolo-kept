@@ -51,18 +51,17 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: INVALID_CREDENTIALS }, { status: 401 });
     }
 
-    // Account lockout check.
-    if (user.lockedUntil && user.lockedUntil > new Date()) {
-      return NextResponse.json(
-        {
-          error:
-            "Account temporarily locked due to too many failed attempts. Reset your password to unlock it.",
-        },
-        { status: 423 }
-      );
-    }
-
+    // Run bcrypt BEFORE the lockout check so a locked account takes the same
+    // time as a wrong-password attempt — prevents a timing oracle that would
+    // confirm the email is registered.
     const passwordMatch = await bcrypt.compare(password, hashToCompare);
+
+    // Lockout check AFTER bcrypt (timing equalized above). Return the same
+    // INVALID_CREDENTIALS message so the lockout state doesn't confirm that
+    // the email is registered.
+    if (user.lockedUntil && user.lockedUntil > new Date()) {
+      return NextResponse.json({ error: INVALID_CREDENTIALS }, { status: 401 });
+    }
 
     if (!passwordMatch) {
       const newFailedAttempts = user.failedAttempts + 1;

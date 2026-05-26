@@ -18,7 +18,12 @@ function ConfirmForm() {
   const [success, setSuccess] = useState(false);
 
   useEffect(() => {
-    if (tokenFromUrl) setToken(tokenFromUrl);
+    if (tokenFromUrl) {
+      setToken(tokenFromUrl);
+      // Remove the token from the URL so it isn't saved in browser history or
+      // leaked via the Referer header to any future external resource loads.
+      window.history.replaceState({}, "", "/reset-password/confirm");
+    }
   }, [tokenFromUrl]);
 
   const strength = password ? getPasswordStrengthLabel(password) : null;

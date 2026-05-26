@@ -1,3 +1,4 @@
+import { createHash } from "crypto";
 import { cookies } from "next/headers";
 import { NextRequest, NextResponse } from "next/server";
 import { prisma } from "./prisma";
@@ -13,8 +14,10 @@ export async function createSession(userId: string): Promise<{
   const csrfToken = crypto.randomUUID();
   const expiresAt = new Date(Date.now() + SESSION_DURATION_MS);
 
+  // Store a SHA-256 hash so database read access can't forge live sessions.
+  const tokenHash = createHash("sha256").update(sessionToken).digest("hex");
   await prisma.session.create({
-    data: { userId, token: sessionToken, csrfToken, expiresAt },
+    data: { userId, token: tokenHash, csrfToken, expiresAt },
   });
 
   return { sessionToken, csrfToken };
@@ -62,8 +65,9 @@ export async function getSession(request?: NextRequest) {
 
   if (!token) return null;
 
+  const tokenHash = createHash("sha256").update(token).digest("hex");
   const session = await prisma.session.findUnique({
-    where: { token },
+    where: { token: tokenHash },
     include: { user: true },
   });
 
@@ -83,9 +87,13 @@ export async function requireSession(request?: NextRequest) {
 }
 
 export function getClientIp(request: NextRequest): string {
+  // Next.js 15 removed `ip` from the type but it still exists at runtime on
+  // Vercel (set from the TCP connection, not client headers). Fall back to
+  // x-forwarded-for only as a secondary option for other environments.
+  const reqWithIp = request as NextRequest & { ip?: string };
   return (
+    reqWithIp.ip ??
     request.headers.get("x-forwarded-for")?.split(",")[0]?.trim() ??
-    request.headers.get("x-real-ip") ??
     "127.0.0.1"
   );
 }
@@ -99,8 +107,9 @@ export async function validateCsrf(
   const sessionToken = request.cookies.get("session")?.value;
   if (!sessionToken) return false;
 
+  const tokenHash = createHash("sha256").update(sessionToken).digest("hex");
   const session = await prisma.session.findUnique({
-    where: { token: sessionToken },
+    where: { token: tokenHash },
     select: { csrfToken: true, expiresAt: true },
   });
 

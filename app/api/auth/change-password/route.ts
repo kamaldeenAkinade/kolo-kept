@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
-import { getSession, validateCsrf } from "@/lib/auth";
+import { getSession, validateCsrf, createSession, applySessionCookies } from "@/lib/auth";
 import { validatePasswordStrength } from "@/lib/password";
 
 export async function POST(request: NextRequest) {
@@ -39,7 +39,10 @@ export async function POST(request: NextRequest) {
     });
 
     if (!user) {
-      return NextResponse.json({ error: "User not found." }, { status: 404 });
+      return NextResponse.json(
+        { error: "Something went wrong. Please log in again." },
+        { status: 404 }
+      );
     }
 
     const passwordMatch = await bcrypt.compare(currentPassword, user.passwordHash);
@@ -51,12 +54,23 @@ export async function POST(request: NextRequest) {
     }
 
     const newPasswordHash = await bcrypt.hash(newPassword, 12);
-    await prisma.user.update({
-      where: { id: session.userId },
-      data: { passwordHash: newPasswordHash },
-    });
 
-    return NextResponse.json({ ok: true });
+    // Update password and invalidate all sessions in one transaction.
+    // Existing sessions (including any attacker's) are invalidated so that
+    // changing a compromised password actually locks the attacker out.
+    await prisma.$transaction([
+      prisma.user.update({
+        where: { id: session.userId },
+        data: { passwordHash: newPasswordHash },
+      }),
+      prisma.session.deleteMany({ where: { userId: session.userId } }),
+    ]);
+
+    // Issue a fresh session for the current user.
+    const { sessionToken, csrfToken } = await createSession(session.userId);
+    const response = NextResponse.json({ ok: true });
+    applySessionCookies(response, sessionToken, csrfToken);
+    return response;
   } catch {
     return NextResponse.json(
       { error: "Something went wrong. Please try again." },

@@ -1,10 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
-import { createSession, applySessionCookies } from "@/lib/auth";
+import { createSession, applySessionCookies, getClientIp } from "@/lib/auth";
 import { validatePasswordStrength } from "@/lib/password";
+import { checkRateLimit } from "@/lib/rate-limit";
+
+const SIGNUP_RATE_LIMIT = 5;
+const SIGNUP_WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 
 export async function POST(request: NextRequest) {
+  const ip = getClientIp(request);
+  const rateCheck = checkRateLimit(`signup:${ip}`, SIGNUP_RATE_LIMIT, SIGNUP_WINDOW_MS);
+  if (!rateCheck.allowed) {
+    return NextResponse.json(
+      { error: "Too many signup attempts. Please try again later." },
+      { status: 429 }
+    );
+  }
+
   try {
     const body = await request.json();
     const { email, password } = body as { email?: string; password?: string };
@@ -36,7 +49,10 @@ export async function POST(request: NextRequest) {
     });
 
     if (existing) {
-      // Generic response — does not reveal that the email is already registered.
+      // Run bcrypt even when the email exists so response time matches the
+      // "new email" path and an attacker can't enumerate registrations by
+      // measuring latency.
+      await bcrypt.hash("dummy-equalize-timing", 12);
       return NextResponse.json(
         { error: "Unable to create account. Please try a different email." },
         { status: 409 }

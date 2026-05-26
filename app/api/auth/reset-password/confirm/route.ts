@@ -1,10 +1,24 @@
+import { createHash } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
 import bcrypt from "bcryptjs";
 import { prisma } from "@/lib/prisma";
 import { validatePasswordStrength } from "@/lib/password";
-import { createSession, applySessionCookies } from "@/lib/auth";
+import { createSession, applySessionCookies, getClientIp } from "@/lib/auth";
+import { checkRateLimit } from "@/lib/rate-limit";
+
+const CONFIRM_RATE_LIMIT = 5;
+const CONFIRM_WINDOW_MS = 15 * 60 * 1000;
 
 export async function POST(request: NextRequest) {
+  const ip = getClientIp(request);
+  const rateCheck = checkRateLimit(`reset-confirm:${ip}`, CONFIRM_RATE_LIMIT, CONFIRM_WINDOW_MS);
+  if (!rateCheck.allowed) {
+    return NextResponse.json(
+      { error: "This reset link is invalid or has expired." },
+      { status: 400 }
+    );
+  }
+
   try {
     const body = await request.json();
     const { token, password } = body as { token?: string; password?: string };
@@ -21,23 +35,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: strengthCheck.message }, { status: 400 });
     }
 
-    // Find all unused, unexpired reset records and check against the raw token.
-    const resets = await prisma.passwordReset.findMany({
-      where: {
-        used: false,
-        expiresAt: { gt: new Date() },
-      },
+    // SHA-256 hash for O(1) indexed lookup — replaces the O(n)×bcrypt linear
+    // scan that could be used as a DoS amplifier.
+    const tokenHash = createHash("sha256").update(token).digest("hex");
+    const matchedReset = await prisma.passwordReset.findFirst({
+      where: { tokenHash, used: false, expiresAt: { gt: new Date() } },
       include: { user: true },
     });
-
-    let matchedReset = null;
-    for (const reset of resets) {
-      const match = await bcrypt.compare(token, reset.tokenHash);
-      if (match) {
-        matchedReset = reset;
-        break;
-      }
-    }
 
     if (!matchedReset) {
       return NextResponse.json(
