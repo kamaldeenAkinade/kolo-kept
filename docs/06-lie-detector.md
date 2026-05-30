@@ -62,22 +62,11 @@ appears in Vercel function logs, CloudWatch, or any other aggregator with
 broader access than the application database.
 
 ---
-
+## My Answer
+C - I checked the code for all the other options and I confirmed they are correct.
 ---
 
 ## AI's Answer
-
-*(Scroll here after you've made your call.)*
-
-&nbsp;
-
-&nbsp;
-
-&nbsp;
-
-&nbsp;
-
-&nbsp;
 
 **The lie is Statement C.**
 
